@@ -13,12 +13,18 @@ from socket import (
     socket,
 )
 from struct import pack, unpack
+from sys import argv
 from threading import Thread
 from time import sleep, time
 from ipaddress import IPv4Network
 
 TIMEOUT = 2
-iface = 'wlan0'
+
+if len(argv) < 2:
+    print(f'Usage: {argv[0]} <interface>')
+    exit(255)
+
+iface = argv[1]
 
 s = socket(AF_PACKET, SOCK_RAW, htons(0x0806))
 s.settimeout(0.25)
@@ -73,7 +79,7 @@ def scan_range():
     ipsp = ips.split('.')
     ipsp[3] = '0'
     n = '.'.join(ipsp)
-    net = IPv4Network(f'{n}/{inet_ntoa(ipsmask)}')
+    net = IPv4Network(f'{n}/{inet_ntoa(ipsmask)}', False)
     for ip in net:
         scan(str(ip))
         sleep(0.01)
