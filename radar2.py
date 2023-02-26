@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from fcntl import ioctl
+from ipaddress import IPv4Network
 from socket import (
     AF_INET,
     AF_PACKET,
@@ -16,60 +17,37 @@ from struct import pack, unpack
 from sys import argv
 from threading import Thread
 from time import sleep, time
-from ipaddress import IPv4Network
 
 TIMEOUT = 2
-
-
+SIOCGIFADDR = 0x8915
+SIOCGIFNETMASK = 0x891b
+ETH_P_ARP = 0x0806
+PTYPE_IP4 = 0x0800
+MAC_LEN = 6
+IP4_LEN = 4
+HTYPE_ETH = 1
 
 class ARPScan(socket):
     def __init__(self, iface):
-        super().__init__(AF_PACKET, SOCK_RAW, htons(0x0806))
+        super().__init__(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))
         self.iface = iface
         self.settimeout(0.25)
         self.bind((iface, 0))
         self.targets = {}
-        self.ipsi, self.ipsmask = self.ifipmaski()
+        self.ipsi, self.ipsmask = self.iface_ip_mask_int()
         self.macs = self.getsockname()[4]
         self.macd = b'\xff\xff\xff\xff\xff\xff'
 
-    def ifipmaski(self):
-        with socket(AF_INET, SOCK_DGRAM) as so:
-            ifacep = pack('256s', self.iface.encode('utf_8'))
-            return (
-                ioctl(so.fileno(), 0x8915, ifacep)[20:24],
-                ioctl(so.fileno(), 0x891b, ifacep)[20:24]
-            )
 
+    def scan(self):
+        rt = Thread(target=self.recv)
+        st = Thread(target=self.scan_range)
 
-    def ping(self, ip):
-        ipdi = inet_aton(ip)
+        rt.start()
+        st.start()
 
-        eth = pack('!6s6sH', self.macd, self.macs, 0x0806)
-        arp = pack('!HHBBH6s4s6s4s', 1, 0x0800, 6, 4, 1, self.macs, self.ipsi, self.macd, ipdi)
-        packet = eth + arp
-        self.send(packet)
-        self.targets[ipdi] = time() + TIMEOUT
+        rt.join()
 
-    def recv(self):
-        te = time() + TIMEOUT
-        while time() < te:
-            try:
-                packet, _ = self.recvfrom(2048)
-            except:
-                continue
-            # eth = unpack('!6s6s2s', packet[0:14])
-            arp = unpack('2s2s1s1s2s6s4s6s4s', packet[14:42])
-            macd = '%x:%x:%x:%x:%x:%x' % unpack('BBBBBB', arp[5])
-            ipdi = arp[6]
-            timeout = self.targets.get(ipdi)
-            if timeout and time() <= timeout:
-                ipd = inet_ntoa(ipdi)
-                try:
-                    host, *_ = gethostbyaddr(ipd)
-                except:
-                    host = ''
-                print(ipd, macd, host)
 
     def scan_range(self):
         ips = inet_ntoa(self.ipsi)
@@ -81,14 +59,49 @@ class ARPScan(socket):
             self.ping(str(ip))
             sleep(0.01)
 
-    def scan(self):
-        rt = Thread(target=self.recv)
-        st = Thread(target=self.scan_range)
 
-        rt.start()
-        st.start()
+    def ping(self, ip):
+        ipdi = inet_aton(ip)
 
-        rt.join()
+        eth = pack('!6s6sH', self.macd, self.macs, ETH_P_ARP)
+        arp = pack('!HHBBH', HTYPE_ETH, PTYPE_IP4, MAC_LEN, IP4_LEN, 1)
+        src = pack('!6s4s', self.macs, self.ipsi)
+        dst = pack('!6s4s', self.macd, ipdi)
+
+        self.send(eth + arp + src + dst)
+        
+        self.time_end = self.targets[ipdi] = time() + TIMEOUT
+
+
+    def recv(self):
+        self.time_end = time() + TIMEOUT
+        while time() < self.time_end:
+            try:
+                packet, _ = self.recvfrom(2048)
+            except:
+                continue
+            # eth = unpack('!6s6s2s', packet[0:14])
+            arp = unpack('2s2s1s1s2s6s4s6s4s', packet[14:42])
+            mac_src, ip_src = arp[5:7]
+            mac = '%x:%x:%x:%x:%x:%x' % unpack('BBBBBB', mac_src)
+            timeout = self.targets.get(ip_src)
+            if timeout and time() <= timeout:
+                self.targets[ip_src] = 0
+                ip = inet_ntoa(ip_src)
+                try:
+                    host, *_ = gethostbyaddr(ip)
+                except:
+                    host = ''
+                print(ip, mac, host)
+
+
+    def iface_ip_mask_int(self):
+        with socket(AF_INET, SOCK_DGRAM) as so:
+            ifacep = pack('256s', self.iface.encode())
+            return (
+                ioctl(so.fileno(), SIOCGIFADDR, ifacep)[20:24],
+                ioctl(so.fileno(), SIOCGIFNETMASK, ifacep)[20:24]
+            )
 
 if __name__ == '__main__':
     if len(argv) < 2:
