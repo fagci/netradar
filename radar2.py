@@ -31,7 +31,7 @@ class ARPScan(socket):
     def __init__(self, iface):
         super().__init__(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))
         self.iface = iface
-        self.settimeout(0.25)
+        self.settimeout(0.5)
         self.bind((iface, 0))
         self.targets = {}
         self.ipsi, self.ipsmask = self.iface_ip_mask_int()
